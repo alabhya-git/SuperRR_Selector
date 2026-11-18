@@ -1,0 +1,43 @@
+let data, role='bat', selected=0;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct=x=>`${Math.round(Number(x)*100)}%`;
+const num=x=>Number(x).toFixed(1);
+const signed=x=>`${Number(x)>0?'+':''}${num(x)}`;
+const roleName=()=>role==='bat'?'Batter':'Bowler';
+
+fetch('data.json').then(r=>{if(!r.ok)throw Error('Summary data unavailable');return r.json()}).then(j=>{data=j;init()}).catch(()=>{$('#ranking').textContent='Summary data could not load. Please refresh the page.'});
+
+function init(){
+  document.querySelectorAll('[data-role]').forEach(b=>b.addEventListener('click',()=>{role=b.dataset.role;selected=0;render()}));
+  $('#variant').addEventListener('change',renderVariant);
+  renderProof();renderAuction();render();
+}
+function render(){
+  document.querySelectorAll('[data-role]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.role===role)));
+  const list=data[role];
+  $('#ranking').innerHTML=list.map((p,i)=>`<button class="player-row ${i===selected?'active':''}" type="button" role="listitem" data-i="${i}" aria-label="Rank ${p.rank}, ${esc(p.name)}, PRR ${num(p.PRR)}"><span class="row-left"><span class="rank-num">${String(p.rank).padStart(2,'0')}</span><span><span class="player-name">${esc(p.name)}</span><span class="status ${p.status==='Released'?'released':''}">${esc(p.status)}${p.retaining_team?' · '+esc(p.retaining_team):''}</span></span></span><span class="row-score">${num(p.PRR)}</span></button>`).join('');
+  document.querySelectorAll('.player-row').forEach(b=>b.addEventListener('click',()=>{selected=Number(b.dataset.i);renderListSelection();renderDetail();renderScatter()}));
+  renderDetail();renderScatter();renderBacktest();renderVariantOptions();
+}
+function renderListSelection(){document.querySelectorAll('.player-row').forEach((b,i)=>b.classList.toggle('active',i===selected))}
+function renderDetail(){
+  const p=data[role][selected], types=Object.entries(p.pressure_types).filter(([,v])=>Number(v.balls)>0).sort((a,b)=>b[1].balls-a[1].balls).slice(0,4), max=Math.max(...types.map(([,v])=>Number(v.balls)),1);
+  $('#player-detail').innerHTML=`<div class="detail-top"><div><span class="tag">${roleName()} #${p.rank} · Tier ${p.tier}</span><h3>${esc(p.name)}</h3><p>${esc(p.status)}${p.retaining_team?' by '+esc(p.retaining_team):''} · latest match ${esc(p.last_match)}</p></div><span class="tag ${p.status==='Released'?'released':''}">${esc(p.status)}</span></div>
+    <div class="detail-stats"><div class="stat-tile"><b>${num(p.PRR)}</b><span>PRR</span></div><div class="stat-tile"><b>${pct(p.p_top10)}</b><span>resamples in top 10</span></div><div class="stat-tile"><b>${p.pressure_balls}</b><span>pressure balls</span></div><div class="stat-tile"><b>${p.pressure_appearances}</b><span>pressure appearances</span></div></div>
+    <h4>What the evidence actually says</h4><div class="evidence-grid"><div class="evidence"><span>Observed pressure rate</span><b>${signed(p.observed_pressure_rae_per100)} / 100</b></div><div class="evidence"><span>Observed usual rate</span><b>${signed(p.observed_usual_rae_per100)} / 100</b></div><div class="evidence"><span>Raw pressure − usual</span><b>${signed(p.observed_change)} / 100</b></div><div class="evidence"><span>80% rating interval</span><b>${num(p.interval80[0])}–${num(p.interval80[1])}</b></div><div class="evidence"><span>Positive pressure appearances</span><b>${pct(p.hit_rate)}</b></div><div class="evidence"><span>Top-10 across model variants</span><b>${pct(p.robustness.share_variants_top10)}</b></div></div>
+    <h4>Situation splits</h4><p class="explain">These overlapping situations describe the wider record; their counts do not sum to the PRR pressure-ball sample.</p><div class="pressure-bars">${types.map(([label,v])=>`<div class="pressure-line"><label title="${esc(label)}">${esc(label)}</label><div class="bar-track"><i style="width:${Math.max(4,Math.round(Number(v.balls)/max*100))}%"></i></div><small>${v.balls} balls · ${signed(v.rae_per100_shrunk)} shrunk runs / 100</small></div>`).join('')}</div><p class="fine" style="margin-top:18px">The interval and top-10 frequency reflect model resampling, not a guarantee of future form. The raw change is descriptive and can conflict with PRR.</p>`;
+}
+function renderScatter(){
+  const ps=data[role], w=560,h=330,pad={l:47,r:20,t:25,b:42};
+  const vals=ps.flatMap(p=>[Number(p.observed_pressure_rae_per100),Number(p.observed_usual_rae_per100)]), lo=Math.floor((Math.min(0,...vals)-8)/20)*20, hi=Math.ceil((Math.max(...vals)+8)/20)*20;
+  const x=v=>pad.l+(Number(v)-lo)/(hi-lo)*(w-pad.l-pad.r), y=v=>h-pad.b-(Number(v)-lo)/(hi-lo)*(h-pad.t-pad.b);
+  const ticks=[];for(let v=lo;v<=hi;v+=20)ticks.push(v);
+  $('#scatter').innerHTML=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Scatter plot of usual versus pressure runs above expectation for the top ten ${role==='bat'?'batters':'bowlers'}"><g>${ticks.map(v=>`<line class="grid" x1="${x(v)}" y1="${pad.t}" x2="${x(v)}" y2="${h-pad.b}"/><line class="grid" x1="${pad.l}" y1="${y(v)}" x2="${w-pad.r}" y2="${y(v)}"/><text x="${x(v)}" y="${h-20}" text-anchor="middle">${v}</text><text x="${pad.l-8}" y="${y(v)+3}" text-anchor="end">${v}</text>`).join('')}</g><line class="diag" x1="${x(lo)}" y1="${y(lo)}" x2="${x(hi)}" y2="${y(hi)}"/><line class="axis" x1="${pad.l}" y1="${h-pad.b}" x2="${w-pad.r}" y2="${h-pad.b}"/><line class="axis" x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${h-pad.b}"/>${ps.map((p,i)=>`<circle data-i="${i}" cx="${x(p.observed_usual_rae_per100)}" cy="${y(p.observed_pressure_rae_per100)}" r="${i===selected?8:6}"><title>${esc(p.name)}: usual ${num(p.observed_usual_rae_per100)}, pressure ${num(p.observed_pressure_rae_per100)}</title></circle>`).join('')}<text x="${w/2}" y="${h-3}" text-anchor="middle">Usual runs above expectation / 100</text><text x="13" y="${h/2}" transform="rotate(-90 13 ${h/2})" text-anchor="middle">Pressure runs above expectation / 100</text></svg>`;
+  $('#scatter').querySelectorAll('circle').forEach(c=>c.addEventListener('click',()=>{selected=Number(c.dataset.i);renderListSelection();renderDetail();renderScatter()}));
+}
+function renderProof(){const p=data.proof;$('#proof-numbers').innerHTML=`<div class="metric-tile"><b>${pct(p.heldout_2026_high_share)}</b><span>2026 balls in high-pressure band</span></div><div class="metric-tile"><b>${pct(p.heldout_2026_concentration)}</b><span>2026 win-probability swing there</span></div><div class="metric-tile"><b>${p.heldout_2026_matches}</b><span>matches in the check</span></div>`}
+function renderBacktest(){const bt=data.backtest[role], labels=[['prr_q20','PRR'],['traditional','Traditional comparator'],['level_mean','Level alone']];$('#backtest').innerHTML=labels.map(([key,label])=>{let v=bt[key].spearman, length=Math.min(Math.abs(v)/.4*50,50), left=v>=0?50:50-length;return `<div class="bt-row"><div class="bt-head"><span>${label}</span><span>${v>0?'+':''}${v.toFixed(2)}</span></div><div class="bt-track"><i class="bt-fill ${key==='traditional'?'trad':''}" style="left:${left}%;width:${length}%"></i></div><div class="bt-caption">n = ${bt[key].n_covered} covered players</div></div>`}).join('')}
+function renderVariantOptions(){const select=$('#variant'),prev=select.value, names=Object.keys(data.robustness[role]);select.innerHTML=names.map((n,i)=>`<option value="${esc(n)}" ${n===prev?'selected':''}>${esc(n)}</option>`).join('');if(!names.includes(prev))select.selectedIndex=0;renderVariant()}
+function renderVariant(){const n=$('#variant').value,v=data.robustness[role][n];if(!v)return;$('#variant-result').innerHTML=`<div class="variant-number">${v.top10_overlap}<span>/ 10</span></div><p class="variant-caption">original top-10 names remain under “${esc(n)}”</p><div class="variant-bar"><i style="width:${v.top10_overlap*10}%"></i></div>`}
+function renderAuction(){const a=data.auction;$('#auction-counts').innerHTML=`<div class="auction-count"><b>${a.bat.Retained}/10</b><span>top batters retained</span></div><div class="auction-count"><b>${a.bowl.Retained}/10</b><span>top bowlers retained</span></div><div class="auction-count"><b>${a.bowl.Released}/10</b><span>top bowlers on release list</span></div>`;const gap=data.rrGaps.filter(r=>r.balls==='pressure'&&((r.discipline==='batting'&&r.phase==='MID2')||(r.discipline==='bowling'&&['PP','MID1','DEATH'].includes(r.phase))));$('#rr-gaps').innerHTML=gap.map(r=>`<div class="rr-row"><span>${r.discipline==='batting'?'Bat':'Bowl'} · ${esc(r.phase)}</span><span>${signed(r.rr_rae_per100)} / 100</span><span>${r.rr_balls} balls</span></div>`).join('')}
